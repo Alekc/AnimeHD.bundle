@@ -2,7 +2,7 @@ PREFIX = "/video/animehd"
 NAME = "AnimeHD"
 ART = "art-default.jpg"
 ICON = "icon-default.png"
-START_MENU = [["Ongoing anime", "ongoing"], ["All anime", "all"]]
+START_MENU = [["Latest anime", "latest"], ["Ongoing anime", "ongoing"], ["All anime", "all"]]
 MP4UPLOAD = [
 	Regex('\'file\': \'(http\://.*?\.mp4)\''),
 	Regex('\'image\': \'(http\://.*?\.jpg)\'')
@@ -53,7 +53,7 @@ class Video:
 
 def Start():
 	ObjectContainer.art = R(ART)
-	HTTP.CacheTime = 10800
+	HTTP.CacheTime = 300
 
 @handler(PREFIX, NAME, thumb=ICON)
 def MainMenu():
@@ -78,22 +78,54 @@ def CreateAnimeList(animes, title = "All anime"):
 	)
 	return oc
 
+def CreateLatestList(animes):
+	oc = ObjectContainer(title1 = "Latest anime")
+	for anime in animes.findall('latest'):
+		anime_id = anime.find('anime_id').text
+		episode_id = anime.find('episode_id').text
+		name = anime.find('name').text
+		host = anime.find('host').text
+		if host == "masterani":
+			cover = "http://www.masterani.me/" + anime.find('thumbnail').text
+		else:
+			cover = anime.find('thumbnail').text
+		new_title = name + " - ep. " + episode_id
+		oc.add(DirectoryObject(
+			key = Callback(WatchEpisode, anime = anime_id, episode = episode_id, title = new_title),
+			title = new_title,
+			thumb = Resource.ContentsOfURLWithFallback(url = cover, fallback='icon-cover.png')
+			)
+		)
+	return oc
+
 @route(PREFIX + "/anime")
 def AnimeList(category = None):
+	Log.Info("[AnimeHD] - Category: " + category)
 	if category == None:
-		Log.Info("No category has been set.")
+		Log.Info("[AnimeHD] - No category has been set.")
 	elif category == "all":
-		animes = Anime().getAnime()
+		animes = Anime().getAnime("/all")
 		if animes:
+			Log.Info("[AnimeHD] - Creating all anime list.")
 			return CreateAnimeList(animes)
 		else:
 			Log.Error("Failed loading anime.")
 	elif category == "ongoing":
 		animes = Anime().getAnime("/ongoing")
 		if animes:
+			Log.Info("[AnimeHD] - Creating ongoing list.")
 			return CreateAnimeList(animes, "Ongoing anime")
 		else:
 			Log.Error("Failed loading anime.")
+	elif category == "latest":
+		animes = Anime().getAnime("/latest")
+		if animes:
+			Log.Info("[AnimeHD] - Creating latest list.")
+			return CreateLatestList(animes)
+		else:
+			Log.Error("Failed loading anime.")
+	else:
+		Log.Error("[AnimeHD] - No defined category.")
 
 @route(PREFIX + "/anime/search")
 def SearchAnimeList(query):
