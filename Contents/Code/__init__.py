@@ -1,3 +1,6 @@
+import time
+
+PLEX_URL = "http://"+ Network.Address +":32400";
 PREFIX = "/video/animehd"
 NAME = "AnimeHD"
 ART = "art-default.jpg"
@@ -11,6 +14,10 @@ ARKVID = [
 	Regex('src="(http:\/\/.*?)"'), 
 	Regex('poster="(http:\/\/.*?)"')
 ]
+
+WatchingThread = False
+WatchingAnime = 0
+WatchingEpisode = 0
 
 class Anime:
 
@@ -51,10 +58,70 @@ class Video:
 				return [vid, img]
 		return None
 
+class Masterani:
+
+	BASE_URL = "http://www.masterani.me/api/anime/account"
+
+	def auth(self, username, password):
+		try:
+			request = HTTP.Request(self.BASE_URL + "/validate", {'username': username, 'password': password})
+		except:
+			Log.Error("[AnimeHD][HTTP] - Could not validate user!") 
+			return None
+		return request.content
+
+	def lastwatched(self, username, password, anime, episode):
+		try:
+			request = HTTP.Request(self.BASE_URL + "/lastwatched", {'username': username, 'password': password, 'id': anime, 'episode': episode})
+		except:
+			Log.Error("[AnimeHD][HTTP] - Could not add anime to lastwatched database!") 
+			return None
+		return request.content
+
+class VideoSession:
+
+	BASE_PATH = PLEX_URL + "/status/sessions";
+
+	def __init__(self):
+		self.total = self.getCurrentTime()
+
+	def getCurrentTime(self):
+		return int(round(time.time() * 1000))
+
+	def elapsed(self):
+		return int(self.total - self.getCurrentTime())
+
+	def getContainerSize(self, xml):
+		return int(xml.xpath('//MediaContainer/@size')[0])
+
+	def getElapsedVideo(self, xml):
+		if self.getContainerSize(xml) > 0:
+			time_elapsed = xml.xpath('//Video/@viewOffset')
+			if len(time_elapsed) > 0:
+				return int(time_elapsed[0])
+		return 0
+
+	def getSession(self):
+		try:
+			return XML.ObjectFromURL(self.BASE_PATH, cacheTime=4)
+		except Exception:
+			Log.Info("[AnimeHD][LastWatched] - Could not open sessions: Make sure you are LOGGED IN (Requires Plex pass)!")
+		return None
+	
 def Start():
 	ObjectContainer.art = R(ART)
-	HTTP.CacheTime = 300
+	HTTP.CacheTime = 180
 
+def ValidatePrefs():
+	if Prefs["username"] and Prefs["password"]:
+		data = Masterani().auth(Prefs["username"], Prefs["password"])
+		if data:
+			Log.Info("[AnimeHD][Account] - " + data)
+			if data != "User validated.":
+				Log.Info("[AnimeHD][Account] - resetting prefs.")
+				url = PLEX_URL + "/video/animehd/:/prefs/set?username=";
+				HTTP.Request(url)
+				
 @handler(PREFIX, NAME, thumb=ICON)
 def MainMenu():
 	oc = ObjectContainer()
@@ -98,6 +165,7 @@ def CreateLatestList(animes):
 		)
 	return oc
 
+
 @route(PREFIX + "/anime")
 def AnimeList(category = None):
 	Log.Info("[AnimeHD] - Category: " + category)
@@ -134,7 +202,7 @@ def SearchAnimeList(query):
 		if animes:
 			return CreateAnimeList(animes, "Search results: " + query)
 		else:
-			return ObjectContainer(header="Error", message="Nothing found! Try something less specific or request anime at www.masterani.me") 
+			return ObjectContainer(header="Search result", message="Nothing found! Try something less specific or request anime titles at www.masterani.me") 
 	else:
 		Log.Error("[AnimeHD] - Must set search query.")
 
@@ -155,16 +223,16 @@ def EpisodeList(anime , cover, name):
 	else:
 		Log.Error("Failed loading episodes for " + name)
 
-@route(PREFIX + "/watch/mirror", include_container=bool)
+@route(PREFIX + "/episode/mirrors", include_container=bool)
 def CreateVideo(url, thumb, anime, episode, resolution, host, include_container=False):
 	video_object = VideoClipObject(
 		key = Callback(CreateVideo, url=url, thumb=thumb, anime=anime, episode=episode, resolution=resolution, host=host, include_container=True),
-		rating_key = url,
+		rating_key = anime + "::" + episode + "::" + host + "::" + resolution,
 		title = host + " - " + resolution + "p",
 		thumb = Resource.ContentsOfURLWithFallback(url=thumb, fallback='icon-cover.png'),
 		items = [
 			MediaObject(
-				parts = [PartObject(key=url)],
+				parts = [PartObject(key=Callback(PlayVideo, url=url, anime=anime, episode=episode))],
 				optimized_for_streaming = True,
 				container = Container.MP4,
 				audio_channels = 2,
@@ -177,6 +245,47 @@ def CreateVideo(url, thumb, anime, episode, resolution, host, include_container=
 		return ObjectContainer(objects=[video_object])
 	else:
 		return video_object
+
+def add():
+	global WatchingThread
+	global WatchingAnime
+	global WatchingEpisode
+	session = VideoSession()
+	while WatchingThread and WatchingAnime > 0 and WatchingEpisode > 0:
+		xml = session.getSession()
+		container_size = session.getContainerSize(xml)
+		if container_size > 0:
+			video_time = session.getElapsedVideo(xml)
+			Log.Debug("[AnimeHD][LastWatched] - Time elapsed: " + str(video_time))
+			if video_time > 420000:
+				q_str = Masterani().lastwatched(Prefs["username"], Prefs["password"], WatchingAnime, WatchingEpisode)
+				Log.Debug("[AnimeHD][LastWatched] - " + q_str)
+				WatchingThread = False
+				WatchingAnime = 0
+				WatchingEpisode = 0
+				break
+		elif session.elapsed() >= 20000:
+			Log.Debug("[AnimeHD][LastWatched] - Closing thread session ended.")
+			WatchingThread = False
+			WatchingAnime = 0
+			WatchingEpisode = 0
+			break
+		Thread.Sleep(5)
+	
+@indirect
+def PlayVideo(url, anime, episode):
+	if Prefs["username"] and Prefs["password"]:
+		global WatchingThread
+		global WatchingAnime
+		global WatchingEpisode
+		WatchingAnime = anime
+		WatchingEpisode = episode
+		if not WatchingThread:
+			WatchingThread = True
+			Thread.Create(add, globalize=True)
+		else:
+			Log.Debug("[AnimeHD][LastWatched] - Thread already running.")
+	return IndirectResponse(VideoClipObject, key=url)
 
 @route(PREFIX + "/episode")
 def WatchEpisode(anime, episode, title):
