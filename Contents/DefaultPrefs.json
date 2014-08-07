@@ -1,0 +1,16 @@
+[
+        {
+                "id":"username",
+                "label":"Masterani.me username",
+                "type":"text",
+                "default":"",
+        },
+
+        {
+                "id":"password",
+                "label":"Masterani.me password",
+                "type":"text",
+                "option":"hidden",
+                "default":"",
+        },
+]
