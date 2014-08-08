@@ -15,9 +15,7 @@ ARKVID = [
 	Regex('poster="(http:\/\/.*?)"')
 ]
 
-WatchingThread = False
-WatchingAnime = 0
-WatchingEpisode = 0
+CURRENTLY_PLAYING = {}
 
 class Anime:
 
@@ -78,27 +76,26 @@ class Masterani:
 			return None
 		return request.content
 
-class VideoSession:
+class PMSSession:
 
 	BASE_PATH = PLEX_URL + "/status/sessions";
-
-	def __init__(self):
-		self.total = self.getCurrentTime()
-
-	def getCurrentTime(self):
-		return int(round(time.time() * 1000))
-
-	def elapsed(self):
-		return int(self.total - self.getCurrentTime())
 
 	def getContainerSize(self, xml):
 		return int(xml.xpath('//MediaContainer/@size')[0])
 
-	def getElapsedVideo(self, xml):
-		if self.getContainerSize(xml) > 0:
-			time_elapsed = xml.xpath('//Video/@viewOffset')
-			if len(time_elapsed) > 0:
-				return int(time_elapsed[0])
+	def getContainer(self, xml, key):
+		try:
+			return xml.xpath("//Video[@ratingKey='" + key + "']")[0]
+		except:
+			return None
+
+	def getElapsedVideo(self, xml, key):
+		try:
+			time_elapsed = xml.xpath("//Video[@ratingKey='" + key + "']/@viewOffset")
+		except:
+			return 0
+		if len(time_elapsed) > 0:
+			return int(time_elapsed[0])
 		return 0
 
 	def getSession(self):
@@ -107,6 +104,21 @@ class VideoSession:
 		except Exception:
 			Log.Info("[AnimeHD][LastWatched] - Could not open sessions: Make sure you are LOGGED IN (Requires Plex pass)!")
 		return None
+
+class VideoSession:
+
+	def __init__(self, anime, episode):
+		self.anime = anime
+		self.episode = episode
+		self.total = self.getCurrentTime()
+
+	def getCurrentTime(self):
+		return int(round(time.time() * 1000))
+
+	def elapsed(self):
+		return int(self.total - self.getCurrentTime())
+
+	
 	
 def Start():
 	ObjectContainer.art = R(ART)
@@ -225,14 +237,15 @@ def EpisodeList(anime , cover, name):
 
 @route(PREFIX + "/episode/mirrors", include_container=bool)
 def CreateVideo(url, thumb, anime, episode, resolution, host, include_container=False):
+	rating_key = anime + "::" + episode + "::" + host + "::" + resolution + "::animehd"
 	video_object = VideoClipObject(
 		key = Callback(CreateVideo, url=url, thumb=thumb, anime=anime, episode=episode, resolution=resolution, host=host, include_container=True),
-		rating_key = anime + "::" + episode + "::" + host + "::" + resolution,
+		rating_key = rating_key,
 		title = host + " - " + resolution + "p",
 		thumb = Resource.ContentsOfURLWithFallback(url=thumb, fallback='icon-cover.png'),
 		items = [
 			MediaObject(
-				parts = [PartObject(key=Callback(PlayVideo, url=url, anime=anime, episode=episode))],
+				parts = [PartObject(key=Callback(PlayVideo, url=url, unique=rating_key, anime=anime, episode=episode))],
 				optimized_for_streaming = True,
 				container = Container.MP4,
 				audio_channels = 2,
@@ -247,44 +260,35 @@ def CreateVideo(url, thumb, anime, episode, resolution, host, include_container=
 		return video_object
 
 def add():
-	global WatchingThread
-	global WatchingAnime
-	global WatchingEpisode
-	session = VideoSession()
-	while WatchingThread and WatchingAnime > 0 and WatchingEpisode > 0:
-		xml = session.getSession()
-		container_size = session.getContainerSize(xml)
-		if container_size > 0:
-			video_time = session.getElapsedVideo(xml)
-			Log.Debug("[AnimeHD][LastWatched] - Time elapsed: " + str(video_time))
-			if video_time > 420000:
-				q_str = Masterani().lastwatched(Prefs["username"], Prefs["password"], WatchingAnime, WatchingEpisode)
-				Log.Debug("[AnimeHD][LastWatched] - " + q_str)
-				WatchingThread = False
-				WatchingAnime = 0
-				WatchingEpisode = 0
-				break
-		elif session.elapsed() >= 20000:
-			Log.Debug("[AnimeHD][LastWatched] - Closing thread session ended.")
-			WatchingThread = False
-			WatchingAnime = 0
-			WatchingEpisode = 0
-			break
-		Thread.Sleep(5)
+	session = PMSSession()
+	while len(CURRENTLY_PLAYING) > 0:
+		for key, video in CURRENTLY_PLAYING.items():
+			xml = session.getSession()
+			container = session.getContainer(xml, key)
+			if container != None:
+				video_time = session.getElapsedVideo(xml, key)
+				Log.Debug("[AnimeHD][LastWatched] - Time elapsed: " + str(video_time))
+				if video_time > 60000:
+					q_str = Masterani().lastwatched(Prefs["username"], Prefs["password"], video.anime, video.episode)
+					Log.Info("[AnimeHD][LastWatched] - " + q_str)
+					del CURRENTLY_PLAYING[key]
+			elif video.elapsed() >= 20000:
+				Log.Debug("[AnimeHD][LastWatched] - Deleting video from CURRENTLY_PLAYING.")
+				del CURRENTLY_PLAYING[key]
+			Thread.Sleep(5)
 	
 @indirect
-def PlayVideo(url, anime, episode):
+def PlayVideo(url, unique, anime, episode):
 	if Prefs["username"] and Prefs["password"]:
-		global WatchingThread
-		global WatchingAnime
-		global WatchingEpisode
-		WatchingAnime = anime
-		WatchingEpisode = episode
-		if not WatchingThread:
-			WatchingThread = True
-			Thread.Create(add, globalize=True)
+		if len(CURRENTLY_PLAYING) > 0:
+			if unique in CURRENTLY_PLAYING:
+				Log.Debug("[AnimeHD][LastWatched] - Already added video to CURRENTLY_PLAYING.")
+			else:
+				Log.Debug("[AnimeHD][LastWatched] - Adding video to CURRENTLY_PLAYING.")
+				CURRENTLY_PLAYING[unique] = VideoSession(anime, episode)
 		else:
-			Log.Debug("[AnimeHD][LastWatched] - Thread already running.")
+			CURRENTLY_PLAYING[unique] = VideoSession(anime, episode)
+			Thread.Create(add, globalize=True)
 	return IndirectResponse(VideoClipObject, key=url)
 
 @route(PREFIX + "/episode")
