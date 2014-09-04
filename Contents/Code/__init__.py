@@ -11,7 +11,7 @@ MP4UPLOAD = [
 	Regex('\'image\': \'(http\://.*?\.jpg)\'')
 ]
 ARKVID = [
-	Regex('src="(http:\/\/.*?)"'), 
+	Regex('source src="(http:\/\/.*?)"'), 
 	Regex('poster="(http:\/\/.*?)"')
 ]
 
@@ -52,7 +52,7 @@ class Video:
 				vid = self.scrape(src, ARKVID[0])
 				img = self.scrape(src, ARKVID[1])
 
-			if vid and img: 
+			if vid: 
 				return [vid, img]
 		return None
 
