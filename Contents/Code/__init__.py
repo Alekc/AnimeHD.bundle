@@ -7,7 +7,7 @@ ART = "art-default.jpg"
 ICON = "icon-default.png"
 START_MENU = [["Latest anime", "latest"], ["Ongoing anime", "ongoing"], ["All anime", "all"]]
 MP4UPLOAD = [
-	Regex('\'file\': \'(http\://.*?\.mp4)\''),
+	Regex('url: "(http\:\/\/.*?\/video\.mp4.*?)"'),
 	Regex('\'image\': \'(http\://.*?\.jpg)\'')
 ]
 ARKVID = [
