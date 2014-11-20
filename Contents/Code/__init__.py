@@ -19,7 +19,7 @@ CURRENTLY_PLAYING = {}
 
 class Anime:
 
-	BASE_URL = 'http://www.masterani.me/api/anime'
+	BASE_URL = 'http://www.masterani.me/api/animes'
 
 	def getAnime(self, query = ""):
 		try :
@@ -29,8 +29,14 @@ class Anime:
 
 class Video:
 
-	def __init__(self, url):
-		self.url = url
+	def __init__(self, host_id, embed_id):
+		self.host_id = host_id
+		if self.host_id == 1:
+			self.url = "http://mp4upload.com/embed-" + embed_id + ".html"
+		elif self.host_id == 2:
+			self.url = "http://arkvid.tv/player/?v=" + embed_id
+		else:
+			self.url = None
 
 	def scrape(self, html, regex):
 		found = regex.search(html)
@@ -38,17 +44,18 @@ class Video:
 			return found.group(1)
 		return None
 
-	def get(self, host):
+	def get(self):
+		Log.Info("[AnimeHD] - URL: " + self.url) 
 		try:
 			src = HTTP.Request(self.url).content
 		except Exception:
-			Log.Error("[AnimeHD][HTTP] - Could not crawl website") 
+			Log.Error("[AnimeHD][HTTP] - Could not crawl hosting website! " + self.host_id) 
 			return None
-		if src and host:
-			if host == "MP4Upload":
+		if src:
+			if self.host_id == 1:
 				vid = self.scrape(src, MP4UPLOAD[0])
 				img = self.scrape(src, MP4UPLOAD[1])
-			elif host == "Arkvid":
+			elif self.host_id == 2:
 				vid = self.scrape(src, ARKVID[0])
 				img = self.scrape(src, ARKVID[1])
 
@@ -107,8 +114,7 @@ class PMSSession:
 
 class VideoSession:
 
-	def __init__(self, anime, episode):
-		self.anime = anime
+	def __init__(self, episode):
 		self.episode = episode
 		self.total = self.getCurrentTime()
 
@@ -151,7 +157,6 @@ def CreateAnimeList(animes, title = "All anime"):
 		oc.add(DirectoryObject(
 			key = Callback(EpisodeList, anime = anime_id, cover = cover, name = name),
 			title = name,
-			summary = "www.masterani.me",
 			thumb = Resource.ContentsOfURLWithFallback(url = cover, fallback='icon-cover.png')
 		)
 	)
@@ -160,17 +165,13 @@ def CreateAnimeList(animes, title = "All anime"):
 def CreateLatestList(animes):
 	oc = ObjectContainer(title1 = "Latest anime")
 	for anime in animes.findall('latest'):
-		anime_id = anime.find('anime_id').text
 		episode_id = anime.find('episode_id').text
 		name = anime.find('name').text
-		host = anime.find('host').text
-		if host == "masterani":
-			cover = "http://www.masterani.me/" + anime.find('thumbnail').text
-		else:
-			cover = anime.find('thumbnail').text
-		new_title = name + " - ep. " + episode_id
+		name_episode = anime.find('episode').text
+		cover = anime.find('cover').text
+		new_title = name + " - ep. " + name_episode
 		oc.add(DirectoryObject(
-			key = Callback(WatchEpisode, anime = anime_id, episode = episode_id, title = new_title),
+			key = Callback(WatchEpisode, episode = episode_id, title = new_title),
 			title = new_title,
 			thumb = Resource.ContentsOfURLWithFallback(url = cover, fallback='icon-cover.png')
 			)
@@ -220,14 +221,15 @@ def SearchAnimeList(query):
 
 @route(PREFIX + "/episodes")
 def EpisodeList(anime , cover, name):
-	episodes = Anime().getAnime("/" + anime)
+	episodes = Anime().getAnime("/" + anime + "/episodes")
 	if episodes:
 		oc = ObjectContainer(title1 = name + " - Episodes")
 		for episode in episodes.findall('episode'):
 			episode_id = episode.find('id').text
+			episode = episode.find('name').text
 			oc.add(DirectoryObject(
-				key = Callback(WatchEpisode, anime = anime, episode = episode_id, title = name + " - ep. " + episode_id),
-				title = episode_id,
+				key = Callback(WatchEpisode, episode = episode_id, title = name + " - ep. " + episode),
+				title = episode,
 				thumb = Resource.ContentsOfURLWithFallback(url = cover, fallback='icon-cover.png')
 			)
 		)
@@ -236,16 +238,16 @@ def EpisodeList(anime , cover, name):
 		Log.Error("Failed loading episodes for " + name)
 
 @route(PREFIX + "/episode/mirrors", include_container=bool)
-def CreateVideo(url, thumb, anime, episode, resolution, host, include_container=False):
-	rating_key = anime + "::" + episode + "::" + host + "::" + resolution + "::animehd"
+def CreateVideo(url, thumb, episode, resolution, host, include_container=False):
+	rating_key = episode + "::" + host + "::" + resolution + "::animehd"
 	video_object = VideoClipObject(
-		key = Callback(CreateVideo, url=url, thumb=thumb, anime=anime, episode=episode, resolution=resolution, host=host, include_container=True),
+		key = Callback(CreateVideo, url=url, thumb=thumb, episode=episode, resolution=resolution, host=host, include_container=True),
 		rating_key = rating_key,
 		title = host + " - " + resolution + "p",
 		thumb = Resource.ContentsOfURLWithFallback(url=thumb, fallback='icon-cover.png'),
 		items = [
 			MediaObject(
-				parts = [PartObject(key=Callback(PlayVideo, url=url, unique=rating_key, anime=anime, episode=episode))],
+				parts = [PartObject(key=Callback(PlayVideo, url=url, unique=rating_key, episode=episode))],
 				optimized_for_streaming = True,
 				container = Container.MP4,
 				audio_channels = 2,
@@ -269,7 +271,7 @@ def add():
 				video_time = session.getElapsedVideo(xml, key)
 				Log.Debug("[AnimeHD][LastWatched] - Time elapsed: " + str(video_time))
 				if video_time > 60000:
-					q_str = Masterani().lastwatched(Prefs["username"], Prefs["password"], video.anime, video.episode)
+					q_str = "TESTING"
 					Log.Info("[AnimeHD][LastWatched] - " + q_str)
 					del CURRENTLY_PLAYING[key]
 			elif video.elapsed() >= 20000:
@@ -278,34 +280,43 @@ def add():
 			Thread.Sleep(5)
 	
 @indirect
-def PlayVideo(url, unique, anime, episode):
+def PlayVideo(url, unique, episode):
 	if Prefs["username"] and Prefs["password"]:
 		if len(CURRENTLY_PLAYING) > 0:
 			if unique in CURRENTLY_PLAYING:
 				Log.Debug("[AnimeHD][LastWatched] - Already added video to CURRENTLY_PLAYING.")
 			else:
 				Log.Debug("[AnimeHD][LastWatched] - Adding video to CURRENTLY_PLAYING.")
-				CURRENTLY_PLAYING[unique] = VideoSession(anime, episode)
+				CURRENTLY_PLAYING[unique] = VideoSession(episode)
 		else:
-			CURRENTLY_PLAYING[unique] = VideoSession(anime, episode)
+			CURRENTLY_PLAYING[unique] = VideoSession(episode)
 			Thread.Create(add, globalize=True)
 	return IndirectResponse(VideoClipObject, key=url)
 
 @route(PREFIX + "/episode")
-def WatchEpisode(anime, episode, title):
-	mirrors = Anime().getAnime("/" + anime + "/" + episode)
+def WatchEpisode(episode, title):
+	mirrors = Anime().getAnime("/episode/" + episode)
 	if mirrors:
 		oc = ObjectContainer(title1 = title)
 		for mirror in mirrors.findall('mirror'):
-			host = mirror.find('host').text
-			video = Video(mirror.find('url').text)	
-			url = video.get(host)
-			quality = mirror.find('quality').text
-			if url:
-				Log.Info("[AnimeHD][Success] - Loading: " + host + " - res.: " + quality)
-				oc.add(CreateVideo(url[0], url[1], anime, episode, quality, host))
+			host = mirror.find('host_id').text
+			host_id = int(host)
+			if host == "1":
+				host = "MP4Upload"
+			elif host == "2":
+				host = "Arkvid"
+			if host_id != None and host_id <= 2:
+				embed_id = mirror.find('embed_id').text
+				quality = mirror.find('quality').text
+				video = Video(host_id, embed_id)	
+				url = video.get()
+				if url:
+					Log.Info("[AnimeHD][Success] - Loading: " + host + " - res.: " + quality)
+					oc.add(CreateVideo(url[0], url[1], episode, quality, host))
+				else:
+					Log.Error("[AnimeHD][Failed] - Couldn't load video: " + host + ":" + quality)	
 			else:
-				Log.Error("[AnimeHD][Failed] - Couldn't load video: " + host + ":" + quality)	
+				Log.Info("[AnimeHD] - Host: " + host)
 	else:
-		Log.Error("Failed loading video(s) for " + name + " ep. " + episode)
+		Log.Error("Failed loading video(s) for ep. " + episode)
 	return oc
